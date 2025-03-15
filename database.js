@@ -1,7 +1,14 @@
 const mongoose = require('mongoose');
+const dotenv = require('dotenv');
+
+// Charger les variables d'environnement depuis .env
+dotenv.config();
+
+// Récupérer l'URI de MongoDB depuis .env
+const MONGO_URI = process.env.MONGO_URI;
 
 // Connexion à MongoDB
-mongoose.connect('mongodb+srv://josh:JcipLjQSbhxbruLU@cluster0.hn4lm.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+mongoose.connect(MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
