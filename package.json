@@ -1,20 +1,28 @@
 {
-  "name": "telegram-bot",
+  "name": "cashxelitebot",
   "version": "1.0.0",
-  "description": "Bot Telegram avec Telegraf et MongoDB",
-  "main": "index.js",
+  "description": "Un bot Telegram pour gagner des récompenses via des invitations et des jeux.",
+  "main": "bot.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node bot.js",
+    "dev": "nodemon bot.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "keywords": [
+    "telegram",
+    "bot",
+    "nodejs",
+    "mongodb"
+  ],
+  "author": "TonNom",
+  "license": "ISC",
   "dependencies": {
-    "telegraf": "^4.12.2",
-    "mongoose": "^7.0.0",
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.0.3", 
+    "mongoose": "^8.0.3", 
+    "telegraf": "^4.12.2", 
+    "http": "^0.0.1-security" 
   },
-  "engines": {
-    "node": ">=14.0.0"
-  },
-  "keywords": ["telegram", "bot", "telegraf", "mongodb"],
-  "author": "",
-  "license": "MIT"
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
 }
