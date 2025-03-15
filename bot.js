@@ -17,7 +17,7 @@ const bot = new Telegraf(BOT_TOKEN); // Utilisation du token depuis .env
 const withdrawalProcess = new Map();
 
 
-const withdrawalProcess = new Map();
+
 
 // Middleware de débogage et gestion d'erreurs
 bot.use(async (ctx, next) => {
