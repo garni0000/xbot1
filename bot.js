@@ -233,13 +233,55 @@ bot.command('admin', async (ctx) => {
 
 
 
+// Vérifier si l'utilisateur est administrateur
+function isAdmin(userId) {
+  return String(userId) === ADMIN_ID;
+}
 
+// Fonction utilitaire pour faire une pause entre les envois par lots
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// Fonction utilitaire pour envoyer le contenu d'un broadcast
+async function sendContent(chatId, content) {
+  try {
+    if (content.photo) {
+      return await bot.telegram.sendPhoto(chatId, content.photo, {
+        caption: content.caption,
+        parse_mode: content.parse_mode,
+        entities: content.entities
+      });
+    } else if (content.video) {
+      return await bot.telegram.sendVideo(chatId, content.video.file_id, {
+        caption: content.caption,
+        parse_mode: content.parse_mode,
+        entities: content.entities
+      });
+    } else if (content.document) {
+      return await bot.telegram.sendDocument(chatId, content.document.file_id, {
+        caption: content.caption,
+        parse_mode: content.parse_mode,
+        entities: content.entities
+      });
+    } else if (content.text) {
+      return await bot.telegram.sendMessage(chatId, content.text, {
+        parse_mode: content.parse_mode,
+        entities: content.entities
+      });
+    }
+  } catch (error) {
+    console.error(`Erreur lors de l'envoi pour ${chatId}:`, error.message);
+    throw error;
+  }
+}
+
+// Commande /send pour lancer une diffusion
 bot.command('send', async (ctx) => {
   if (ctx.chat.type !== 'private') return;
   if (!isAdmin(ctx.from.id)) return;
 
+  // Il faut répondre à un message pour lancer la diffusion
   const message = ctx.message.reply_to_message;
-  if (!message) return ctx.reply('⚠️ Réponds à un message avec /send');
+  if (!message) return ctx.reply('⚠️ Répondez à un message avec /send');
 
   const content = {
     text: message.text,
@@ -251,6 +293,7 @@ bot.command('send', async (ctx) => {
     parse_mode: 'MarkdownV2'
   };
 
+  // Insertion du broadcast dans la collection 'broadcasts'
   await db.collection('broadcasts').insertOne({
     content,
     date: new Date(),
@@ -259,13 +302,95 @@ bot.command('send', async (ctx) => {
 
   await ctx.reply(
     `⚠️ Diffuser ce message à tous les utilisateurs ?\n\n` +
-    `📝 Type: ${message.photo ? 'Photo' : ''} ${message.video ? 'Vidéo' : ''} ${message.document ? 'Document' : ''} ${message.text ? 'Texte' : ''}\n` +
+    `📝 Type: ${message.photo ? 'Photo' : ''}${message.video ? ' Vidéo' : ''}${message.document ? ' Document' : ''}${message.text ? ' Texte' : ''}\n` +
     `📏 Légende: ${content.caption ? 'Oui' : 'Non'}`,
     Markup.inlineKeyboard([
       Markup.button.callback('✅ Confirmer', 'confirm_broadcast'),
       Markup.button.callback('❌ Annuler', 'cancel_broadcast')
     ])
   );
+});
+
+// Action pour confirmer la diffusion
+bot.action('confirm_broadcast', async (ctx) => {
+  try {
+    // Supposons que tes utilisateurs sont stockés dans la collection "users" et qu'ils possèdent le champ 'telegram_id'
+    const users = await db.collection('users')
+      .find({ status: 'pending' })
+      .project({ telegram_id: 1 })
+      .toArray();
+
+    // Récupération du dernier broadcast enregistré
+    const broadcast = await db.collection('broadcasts')
+      .findOne({}, { sort: { $natural: -1 } });
+
+    if (!broadcast) return ctx.reply('Aucun broadcast trouvé.');
+
+    let success = 0, failed = 0;
+    const batchSize = 30;
+    const totalUsers = users.length;
+
+    // Message initial pour suivre la progression
+    let statusMessage = await ctx.editMessageText(
+      `🚀 **Diffusion en cours...**\n\n` +
+      `📢 **Total à envoyer :** ${totalUsers}\n` +
+      `✅ **Réussis :** 0\n` +
+      `❌ **Échecs :** 0\n` +
+      `📡 **Progression :** 0%`
+    );
+
+    // Fonction pour mettre à jour les statistiques de diffusion
+    async function updateStats() {
+      try {
+        await bot.telegram.editMessageText(
+          ctx.chat.id, statusMessage.message_id, null,
+          `🚀 **Diffusion en cours...**\n\n` +
+          `📢 **Total à envoyer :** ${totalUsers}\n` +
+          `✅ **Réussis :** ${success}\n` +
+          `❌ **Échecs :** ${failed}\n` +
+          `📡 **Progression :** ${((success + failed) / totalUsers * 100).toFixed(2)}%`
+        );
+      } catch (error) {
+        console.error("Erreur mise à jour stats:", error);
+      }
+    }
+
+    const updateInterval = setInterval(updateStats, 1000);
+
+    // Envoi par lots pour éviter les surcharges
+    for (let i = 0; i < users.length; i += batchSize) {
+      const batch = users.slice(i, i + batchSize);
+      const batchPromises = batch.map(async user => {
+        try {
+          await sendContent(user.telegram_id, broadcast.content);
+          success++;
+        } catch (error) {
+          failed++;
+        }
+      });
+
+      await Promise.all(batchPromises);
+      await sleep(1000);
+    }
+
+    clearInterval(updateInterval);
+
+    await ctx.editMessageText(
+      `✅ **Diffusion terminée !**\n\n` + 
+      `📢 **Total :** ${totalUsers}\n` +
+      `✅ **Réussis :** ${success}\n` +
+      `❌ **Échecs :** ${failed}\n` +
+      `📡 **Progression :** 100%`
+    );
+  } catch (error) {
+    console.error("Erreur lors de la diffusion:", error);
+    await ctx.reply('❌ Une erreur est survenue pendant la diffusion.');
+  }
+});
+
+// Action pour annuler la diffusion
+bot.action('cancel_broadcast', async (ctx) => {
+  await ctx.editMessageText('❌ Diffusion annulée.');
 });
 
 
