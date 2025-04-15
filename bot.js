@@ -225,30 +225,82 @@ bot.command('admin', async (ctx) => {
     }
   });
 });
-
-// Commande /send pour diffuser un message à tous les utilisateurs
 bot.command('send', async (ctx) => {
   if (String(ctx.from.id) !== ADMIN_ID) {
     return ctx.reply('❌ Accès refusé. Vous n\'êtes pas administrateur.');
   }
-  // Récupération du message (texte après /send)
-  const messageToSend = ctx.message.text.split(' ').slice(1).join(' ');
-  if (!messageToSend) {
-    return ctx.reply('Veuillez fournir le message à envoyer. Exemple: /send Votre message ici');
-  }
-  const users = await User.find().select('id');
-  let successCount = 0;
-  for (const user of users) {
-    try {
-      await bot.telegram.sendMessage(user.id, messageToSend);
-      successCount++;
-    } catch (error) {
-      console.error(`Erreur envoi message à ${user.id}:`, error.message);
+
+  // Détection du type de média et récupération du file_id
+  const mediaTypes = ['photo', 'video', 'document', 'audio', 'sticker', 'voice', 'video_note'];
+  let mediaType = null;
+  let mediaFileId = null;
+
+  for (const type of mediaTypes) {
+    if (ctx.message[type]) {
+      mediaType = type;
+      if (type === 'photo') {
+        mediaFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+      } else {
+        mediaFileId = ctx.message[type].file_id;
+      }
+      break;
     }
   }
-  ctx.reply(`✅ Message envoyé à ${successCount}/${users.length} utilisateurs.`);
-});
 
+  // Récupération du texte (depuis le message ou la légende)
+  const sourceText = ctx.message.text || ctx.message.caption || '';
+  const messageToSend = sourceText.split(' ').slice(1).join(' ');
+
+  // Validation si pas de média
+  if (!mediaType && !messageToSend) {
+    return ctx.reply('Veuillez fournir un message ou un média avec légende. Exemple: /send Votre message ici');
+  }
+
+  const users = await User.find().select('id');
+  let successCount = 0;
+
+  for (const user of users) {
+    try {
+      if (mediaType) {
+        const options = { caption: messageToSend };
+        switch (mediaType) {
+          case 'photo':
+            await bot.telegram.sendPhoto(user.id, mediaFileId, options);
+            break;
+          case 'video':
+            await bot.telegram.sendVideo(user.id, mediaFileId, options);
+            break;
+          case 'document':
+            await bot.telegram.sendDocument(user.id, mediaFileId, options);
+            break;
+          case 'audio':
+            await bot.telegram.sendAudio(user.id, mediaFileId, options);
+            break;
+          case 'voice':
+            await bot.telegram.sendVoice(user.id, mediaFileId, options);
+            break;
+          case 'sticker':
+            await bot.telegram.sendSticker(user.id, mediaFileId);
+            if (messageToSend) await bot.telegram.sendMessage(user.id, messageToSend);
+            break;
+          case 'video_note':
+            await bot.telegram.sendVideoNote(user.id, mediaFileId);
+            if (messageToSend) await bot.telegram.sendMessage(user.id, messageToSend);
+            break;
+          default:
+            break;
+        }
+      } else {
+        await bot.telegram.sendMessage(user.id, messageToSend);
+      }
+      successCount++;
+    } catch (error) {
+      console.error(`Erreur envoi à ${user.id}:`, error.message);
+    }
+  }
+
+  await ctx.reply(`✅ Message diffusé à ${successCount}/${users.length} utilisateurs.`);
+});
 // Processus de retrait via messages texte
 bot.on('text', async (ctx) => {
   const userId = ctx.message.from.id;
