@@ -225,82 +225,144 @@ bot.command('admin', async (ctx) => {
     }
   });
 });
+
+
+
+
+
+
+
+
+
+
+
+
+// Commande /send
 bot.command('send', async (ctx) => {
   if (String(ctx.from.id) !== ADMIN_ID) {
     return ctx.reply('❌ Accès refusé. Vous n\'êtes pas administrateur.');
   }
 
-  // Détection du type de média et récupération du file_id
-  const mediaTypes = ['photo', 'video', 'document', 'audio', 'sticker', 'voice', 'video_note'];
+  ctx.session = {}; // reset session
+  ctx.session.waitingBroadcast = true;
+
+  await ctx.reply('📩 Veuillez maintenant envoyer le message ou le média à diffuser.');
+});
+
+// Réception du message ou média à diffuser
+bot.on('message', async (ctx) => {
+  if (!ctx.session || !ctx.session.waitingBroadcast) return;
+
+  ctx.session.waitingBroadcast = false;
+
+  const message = ctx.message;
+  const mediaTypes = ['photo', 'video', 'document', 'audio', 'voice', 'sticker', 'video_note'];
   let mediaType = null;
   let mediaFileId = null;
 
   for (const type of mediaTypes) {
-    if (ctx.message[type]) {
+    if (message[type]) {
       mediaType = type;
-      if (type === 'photo') {
-        mediaFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-      } else {
-        mediaFileId = ctx.message[type].file_id;
-      }
+      mediaFileId = (type === 'photo')
+        ? message.photo[message.photo.length - 1].file_id
+        : message[type].file_id;
       break;
     }
   }
 
-  // Récupération du texte (depuis le message ou la légende)
-  const sourceText = ctx.message.text || ctx.message.caption || '';
-  const messageToSend = sourceText.split(' ').slice(1).join(' ');
-
-  // Validation si pas de média
-  if (!mediaType && !messageToSend) {
-    return ctx.reply('Veuillez fournir un message ou un média avec légende. Exemple: /send Votre message ici');
-  }
+  const caption = message.caption || message.text || '';
+  ctx.session.preview = { mediaType, mediaFileId, caption };
 
   const users = await User.find().select('id');
-  let successCount = 0;
+  const count = users.length;
+
+  let resume = `✅ Vous allez diffuser ce contenu à *${count}* utilisateurs.\n`;
+  resume += mediaType ? `📎 Type: ${mediaType}\n` : `📝 Message texte\n`;
+  if (caption) resume += `✏️ Légende: ${caption}`;
+
+  await ctx.reply(resume, {
+    parse_mode: 'Markdown',
+    reply_markup: Markup.inlineKeyboard([
+      Markup.button.callback('📤 Diffuser maintenant', 'confirm_broadcast')
+    ])
+  });
+});
+
+// Confirmation de la diffusion
+bot.action('confirm_broadcast', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const { mediaType, mediaFileId, caption } = ctx.session.preview || {};
+  const users = await User.find().select('id');
+  let success = 0;
 
   for (const user of users) {
     try {
       if (mediaType) {
-        const options = { caption: messageToSend };
+        const opts = caption ? { caption } : {};
         switch (mediaType) {
           case 'photo':
-            await bot.telegram.sendPhoto(user.id, mediaFileId, options);
+            await bot.telegram.sendPhoto(user.id, mediaFileId, opts);
             break;
           case 'video':
-            await bot.telegram.sendVideo(user.id, mediaFileId, options);
+            await bot.telegram.sendVideo(user.id, mediaFileId, opts);
             break;
           case 'document':
-            await bot.telegram.sendDocument(user.id, mediaFileId, options);
+            await bot.telegram.sendDocument(user.id, mediaFileId, opts);
             break;
           case 'audio':
-            await bot.telegram.sendAudio(user.id, mediaFileId, options);
+            await bot.telegram.sendAudio(user.id, mediaFileId, opts);
             break;
           case 'voice':
-            await bot.telegram.sendVoice(user.id, mediaFileId, options);
-            break;
-          case 'sticker':
-            await bot.telegram.sendSticker(user.id, mediaFileId);
-            if (messageToSend) await bot.telegram.sendMessage(user.id, messageToSend);
+            await bot.telegram.sendVoice(user.id, mediaFileId, opts);
             break;
           case 'video_note':
             await bot.telegram.sendVideoNote(user.id, mediaFileId);
-            if (messageToSend) await bot.telegram.sendMessage(user.id, messageToSend);
             break;
-          default:
+          case 'sticker':
+            await bot.telegram.sendSticker(user.id, mediaFileId);
+            if (caption) await bot.telegram.sendMessage(user.id, caption);
             break;
         }
       } else {
-        await bot.telegram.sendMessage(user.id, messageToSend);
+        await bot.telegram.sendMessage(user.id, caption);
       }
-      successCount++;
-    } catch (error) {
-      console.error(`Erreur envoi à ${user.id}:`, error.message);
+      success++;
+    } catch (err) {
+      console.error(`Erreur pour ${user.id}:`, err.message);
     }
   }
 
-  await ctx.reply(`✅ Message diffusé à ${successCount}/${users.length} utilisateurs.`);
+  await ctx.editMessageText(`✅ Diffusion terminée. Envoyé à ${success}/${users.length} utilisateurs.`);
+  ctx.session = null; // reset session
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Processus de retrait via messages texte
 bot.on('text', async (ctx) => {
   const userId = ctx.message.from.id;
