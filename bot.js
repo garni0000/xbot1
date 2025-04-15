@@ -233,54 +233,13 @@ bot.command('admin', async (ctx) => {
 
 
 
-// Ajoute cette partie dans ton bot CashXElite (remplace ou ajoute à la section admin)
 
-// Gestion des broadcasts
-const broadcastState = new Map();
-
-// Fonction pour envoyer le contenu
-async function sendContent(chatId, content) {
-  try {
-    if (content.photo) {
-      await bot.telegram.sendPhoto(chatId, content.photo, {
-        caption: content.caption,
-        caption_entities: content.entities,
-        parse_mode: content.parse_mode
-      });
-    } else if (content.video) {
-      await bot.telegram.sendVideo(chatId, content.video.file_id, {
-        caption: content.caption,
-        caption_entities: content.entities,
-        parse_mode: content.parse_mode
-      });
-    } else if (content.document) {
-      await bot.telegram.sendDocument(chatId, content.document.file_id, {
-        caption: content.caption,
-        caption_entities: content.entities,
-        parse_mode: content.parse_mode
-      });
-    } else if (content.text) {
-      await bot.telegram.sendMessage(chatId, content.text, {
-        entities: content.entities,
-        parse_mode: content.parse_mode
-      });
-    }
-    return true;
-  } catch (error) {
-    if (error.response?.error_code === 403) {
-      console.log(`Utilisateur ${chatId} a bloqué le bot`);
-      await User.deleteOne({ id: chatId });
-    }
-    return false;
-  }
-}
-
-// Commande admin pour envoyer un broadcast
 bot.command('send', async (ctx) => {
-  if (String(ctx.from.id) !== ADMIN_ID) return;
+  if (ctx.chat.type !== 'private') return;
+  if (!isAdmin(ctx.from.id)) return;
 
   const message = ctx.message.reply_to_message;
-  if (!message) return ctx.reply('⚠️ Répondez à un message avec /send');
+  if (!message) return ctx.reply('⚠️ Réponds à un message avec /send');
 
   const content = {
     text: message.text,
@@ -289,137 +248,25 @@ bot.command('send', async (ctx) => {
     photo: message.photo ? message.photo[message.photo.length - 1].file_id : null,
     video: message.video ? { file_id: message.video.file_id } : null,
     document: message.document ? { file_id: message.document.file_id } : null,
-    parse_mode: 'HTML'
+    parse_mode: 'MarkdownV2'
   };
+
+  await db.collection('broadcasts').insertOne({
+    content,
+    date: new Date(),
+    initiator: ctx.from.id
+  });
 
   await ctx.reply(
     `⚠️ Diffuser ce message à tous les utilisateurs ?\n\n` +
-    `📝 Type: ${message.photo ? 'Photo' : ''}${message.video ? 'Vidéo' : ''}${message.document ? 'Document' : ''}${message.text ? 'Texte' : ''}\n` +
+    `📝 Type: ${message.photo ? 'Photo' : ''} ${message.video ? 'Vidéo' : ''} ${message.document ? 'Document' : ''} ${message.text ? 'Texte' : ''}\n` +
     `📏 Légende: ${content.caption ? 'Oui' : 'Non'}`,
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '✅ Confirmer', callback_data: 'confirm_broadcast' }],
-          [{ text: '❌ Annuler', callback_data: 'cancel_broadcast' }]
-      }
-    }
-  );
-
-  // Stocker le contenu temporairement
-  broadcastState.set(ctx.from.id, { content });
-});
-
-// Actions pour confirmer/annuler le broadcast
-bot.action('confirm_broadcast', async (ctx) => {
-  const userId = String(ctx.from.id);
-  if (userId !== ADMIN_ID) return;
-
-  const broadcastData = broadcastState.get(userId);
-  if (!broadcastData) return ctx.editMessageText('❌ Données de diffusion non trouvées');
-
-  const users = await User.find().select('id');
-  let success = 0, failed = 0;
-  const batchSize = 30;
-  const totalUsers = users.length;
-
-  let statusMessage = await ctx.editMessageText(
-    `🚀 **Diffusion en cours...**\n\n` +
-    `📢 **Total à envoyer :** ${totalUsers}\n` +
-    `✅ **Réussis :** 0\n` +
-    `❌ **Échecs :** 0\n` +
-    `📡 **Progression :** 0%`
-  );
-
-  async function updateStats() {
-    try {
-      await bot.telegram.editMessageText(
-        ctx.chat.id, statusMessage.message_id, null,
-        `🚀 **Diffusion en cours...**\n\n` +
-        `📢 **Total à envoyer :** ${totalUsers}\n` +
-        `✅ **Réussis :** ${success}\n` +
-        `❌ **Échecs :** ${failed}\n` +
-        `📡 **Progression :** ${((success + failed) / totalUsers * 100).toFixed(2)}%`
-      );
-    } catch (error) {
-      console.error("⚠️ Erreur mise à jour stats:", error);
-    }
-  }
-
-  const updateInterval = setInterval(updateStats, 1000);
-
-  for (let i = 0; i < users.length; i += batchSize) {
-    const batch = users.slice(i, i + batchSize);
-    const batchPromises = [];
-
-    for (const user of batch) {
-      batchPromises.push(
-        sendContent(user.id, broadcastData.content)
-          .then(sent => sent ? success++ : failed++)
-          .catch(() => failed++)
-      );
-    }
-
-    await Promise.all(batchPromises);
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Pause entre les batches
-  }
-
-  clearInterval(updateInterval);
-
-  await ctx.editMessageText(
-    `✅ **Diffusion terminée !**\n\n` + 
-    `📢 **Total :** ${totalUsers}\n` +
-    `✅ **Réussis :** ${success}\n` +
-    `❌ **Échecs :** ${failed}\n` +
-    `📡 **Progression :** 100%`
-  );
-
-  broadcastState.delete(userId);
-});
-
-bot.action('cancel_broadcast', async (ctx) => {
-  const userId = String(ctx.from.id);
-  broadcastState.delete(userId);
-  await ctx.editMessageText('❌ Diffusion annulée.');
-});
-
-// Gestion des messages pour les broadcasts (alternative)
-bot.on('message', async (ctx) => {
-  const userId = String(ctx.from.id);
-  if (userId !== ADMIN_ID) return;
-
-  const broadcastData = broadcastState.get(userId);
-  if (!broadcastData || broadcastData.step !== 'awaiting_message') return;
-
-  const message = ctx.message;
-  const content = {
-    text: message.text,
-    caption: message.caption,
-    entities: message.entities || message.caption_entities,
-    photo: message.photo ? message.photo[message.photo.length - 1].file_id : null,
-    video: message.video ? { file_id: message.video.file_id } : null,
-    document: message.document ? { file_id: message.document.file_id } : null,
-    parse_mode: 'HTML'
-  };
-
-  broadcastState.set(userId, { content });
-
-  await ctx.reply(
-    `⚠️ Diffuser ce message à tous les utilisateurs ?\n\n` +
-    `📝 Type: ${message.photo ? 'Photo' : ''}${message.video ? 'Vidéo' : ''}${message.document ? 'Document' : ''}${message.text ? 'Texte' : ''}\n` +
-    `📏 Légende: ${content.caption ? 'Oui' : 'Non'}`,
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '✅ Confirmer', callback_data: 'confirm_broadcast' }],
-          [{ text: '❌ Annuler', callback_data: 'cancel_broadcast' }]
-        ]
-      }
-    }
+    Markup.inlineKeyboard([
+      Markup.button.callback('✅ Confirmer', 'confirm_broadcast'),
+      Markup.button.callback('❌ Annuler', 'cancel_broadcast')
+    ])
   );
 });
-
-
-
 
 
 
