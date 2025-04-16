@@ -1,23 +1,17 @@
-const { Telegraf } = require('telegraf');
+// index.js
+require('dotenv').config();
+const { Telegraf, Markup } = require('telegraf');
 const http = require('http');
-const { User, Withdrawal } = require('./database');
-
-
-
-const dotenv = require('dotenv');
-
-// Charger les variables d'environnement depuis .env
-dotenv.config();
+const Bottleneck = require('bottleneck');
+const { User, Withdrawal } = require('./database'); // Modèle Mongoose (ou autre ORM)
 
 // Récupérer les variables d'environnement
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = process.env.ADMIN_ID;
-
-const bot = new Telegraf(BOT_TOKEN); // Utilisation du token depuis .env
+const ADMIN_ID = process.env.ADMIN_ID; // Doit être une chaîne (ex: "123456789")
+const bot = new Telegraf(BOT_TOKEN);
 const withdrawalProcess = new Map();
 
-
-
+// --- Partie EXISTANTE du bot ---
 
 // Middleware de débogage et gestion d'erreurs
 bot.use(async (ctx, next) => {
@@ -66,7 +60,6 @@ async function registerUser(userId, username, referrerId) {
   try {
     let user = await User.findOne({ id: userId });
     if (!user) {
-      // On initialise joined_channels à false pour que la récompense ne soit pas attribuée avant la vérification
       user = await User.create({ id: userId, username, referrer_id: referrerId, joined_channels: false });
       console.log(`✅ Utilisateur ${userId} enregistré`);
     }
@@ -103,14 +96,12 @@ bot.start(async (ctx) => {
   const userId = ctx.message.from.id;
   const username = ctx.message.from.username || 'Utilisateur';
   const referrerId = ctx.startPayload ? parseInt(ctx.startPayload) : null;
-
   await registerUser(userId, username, referrerId);
-
-  await sendMessage(userId, `𝐁𝐢𝐞𝐧𝐯𝐞𝐧𝐮𝐞 𝐬𝐮𝐫 𝐂𝐚𝐬𝐡 𝐗 𝐞𝐥𝐢𝐭𝐞𝐛𝐨𝐭 𝐥𝐞 𝐩𝐥𝐚𝐭𝐟𝐨𝐫𝐦𝐞 𝐪𝐮𝐢 𝐯𝐚𝐬 𝐭𝐞 𝐟𝐚𝐢𝐫𝐞 𝐠𝐚𝐠𝐧𝐞𝐫 𝐝𝐮 𝐜𝐚𝐬𝐡 💴!\n Rejoignez les canaux pour debloquer ton acces:`, {
+  await sendMessage(userId, `𝐁𝐢𝐞𝐧𝐯𝐞𝐧𝐮𝐞 𝐬𝐮𝐫 𝐂𝐚𝐬𝐡𝐗𝐞𝐥𝐢𝐭𝐞𝐛𝐨𝐭 !\nRejoignez les canaux pour débloquer l'accès :`, {
     reply_markup: {
       inline_keyboard: [
         [{ text: 'Canal 1', url: 'https://t.me/+z73xstC898s4N2Zk' }],
-         [{ text: 'Canal 2', url: 'https://t.me/+z7Ri0edvkbw4MDM0' }],
+        [{ text: 'Canal 2', url: 'https://t.me/+z7Ri0edvkbw4MDM0' }],
         [{ text: 'Canal 3', url: 'https://t.me/+rSXyxHTwcN5lNWE0' }],
         [{ text: '✅ Vérifier', callback_data: 'check' }]
       ]
@@ -118,40 +109,29 @@ bot.start(async (ctx) => {
   });
 });
 
-
-// Vérification de l'abonnement aux canaux et attribution de la récompense si applicable
+// Vérification d'abonnement et récompense
 bot.action('check', async (ctx) => {
   const userId = ctx.from.id;
   const user = await User.findOne({ id: userId });
-
-  if (!user) {
-    return ctx.reply('❌ Utilisateur non trouvé.');
-  }
-
+  if (!user) return ctx.reply('❌ Utilisateur non trouvé.');
   if (await isUserInChannels(userId)) {
     if (!user.joined_channels) {
       await User.updateOne({ id: userId }, { joined_channels: true });
-      // Attribution de la récompense au parrain si l'utilisateur possède un referrer
       if (user.referrer_id) {
         await User.updateOne({ id: user.referrer_id }, { $inc: { invited_count: 1, tickets: 1 } });
         await updateUserBalance(user.referrer_id);
         await notifyReferrer(user.referrer_id, userId);
       }
     }
-
-    // Construction du clavier principal
     let keyboard = [
       [{ text: 'Mon compte 💳' }, { text: 'Inviter📢' }],
       [{ text: 'Play to win 🎰' }, { text: 'Withdrawal💸' }],
       [{ text: 'Support📩' }, { text: 'Tuto 📖' }],
       [{ text: 'Tombola 🎟️' }]
     ];
-
-    // Bouton Admin visible uniquement pour l'admin
     if (String(userId) === ADMIN_ID) {
       keyboard.push([{ text: 'Admin' }]);
     }
-
     ctx.reply('✅ Accès autorisé !', {
       reply_markup: {
         keyboard: keyboard,
@@ -170,12 +150,11 @@ bot.hears(
     const userId = ctx.message.from.id;
     const user = await User.findOne({ id: userId });
     if (!user) return ctx.reply('❌ Utilisateur non trouvé.');
-
     switch (ctx.message.text) {
       case 'Mon compte 💳':
         return ctx.reply(`💰 Solde: ${user.balance} Fcfa\n📈 Invités: ${user.invited_count}\n🎟️ Tickets: ${user.tickets}`);
       case 'Inviter📢':
-        return ctx.reply(`❝𝙏𝙪 𝙜𝙖𝙜𝙣𝙚𝙧𝙖𝙨 𝟮𝟬𝟬 𝙁𝘾𝙁𝘼 𝙥𝙤𝙪𝙧 𝙘𝙝𝙖𝙦𝙪𝙚 𝙥𝙚𝙧𝙨𝙤𝙣𝙣𝙚 𝙦𝙪𝙚 𝙩𝙪 𝙞𝙣𝙫𝙞𝙩𝙚𝙨.❞ \n \n 🔗 Lien de parrainage : https://t.me/cashXelitebot?start=${userId} \n \n ❝🔹 𝐈𝐧𝐯𝐢𝐭𝐞 𝐭𝐞𝐬 𝐚𝐦𝐢𝐬 𝐞𝐭 𝐫𝐞ç𝐨𝐢𝐬 𝐮𝐧𝐞 𝐫é𝐜𝐨𝐦𝐩𝐞𝐧𝐬𝐞 :\n \n✅𝟏 à 𝟏𝟎 𝐚𝐦𝐢𝐬 → 𝟐𝟎𝟎 𝐅𝐂𝐅𝐀 𝐩𝐚𝐫 𝐢𝐧𝐯𝐢𝐭𝐚𝐭𝐢𝐨𝐧\n✅ 𝟏𝟎 à 𝟐𝟎 𝐚𝐦𝐢𝐬 → 𝟑𝟎𝟎 𝐅𝐂𝐅𝐀 𝐩𝐚𝐫 𝐢𝐧𝐯𝐢𝐭𝐚𝐭𝐢𝐨𝐧\n✅ 𝟐𝟎 𝐚𝐦𝐢𝐬 𝐨𝐮 𝐩𝐥𝐮𝐬 → 𝟒𝟎𝟎 𝐅𝐂𝐅𝐀 𝐩𝐚𝐫 𝐢𝐧𝐯𝐢𝐭𝐚𝐭𝐢𝐨𝐧 \n 📲 𝐏𝐥𝐮𝐬 𝐭𝐮 𝐢𝐧𝐯𝐢𝐭𝐞𝐬, 𝐩𝐥𝐮𝐬 𝐭𝐮 𝐠𝐚𝐠𝐧𝐞𝐬 ! 🚀🔥❞`);
+        return ctx.reply(`❝𝙏𝙪 𝙜𝙖𝙜𝙣𝙚𝙧𝙖𝙨 𝟮𝟬𝟬 𝙁𝘾𝙁𝘼 𝙥𝙤𝙪𝙧 𝙘𝙝𝙖𝙦𝙪𝙚 𝙥𝙚𝙧𝙨𝙤𝙣𝙣𝙚 𝙦𝙪𝙚 𝙩𝙪 𝙞𝙣𝙫𝙞𝙩𝙚𝙨.❞ \n\n🔗 Lien de parrainage : https://t.me/cashXelitebot?start=${userId}\n\n❝🔹 𝐈𝐧𝐯𝐢𝐭𝐞 𝐭𝐞𝐬 𝐚𝐦𝐢𝐬 𝐞𝐭 𝐫𝐞ç𝐨𝐢𝐬 𝐮𝐧𝐞 𝐫é𝐜𝐨𝐦𝐩𝐞𝐧𝐬𝐞.\n\n✅ 1 à 10 amis → 200 Fcfa par invitation\n✅ 10 à 20 amis → 300 Fcfa par invitation\n✅ 20 amis ou plus → 400 Fcfa par invitation\n📲 Plus tu invites, plus tu gagnes ! 🚀🔥❞`);
       case 'Play to win 🎰':
         return ctx.reply(`🎮 Jouer ici : https://t.me/cashXelitebot/cash`);
       case 'Withdrawal💸':
@@ -198,7 +177,8 @@ bot.hears(
               inline_keyboard: [
                 [{ text: '👥 Total Utilisateurs', callback_data: 'admin_users' }],
                 [{ text: '📅 Utilisateurs/mois', callback_data: 'admin_month' }],
-                [{ text: '📢 Diffuser message', callback_data: 'admin_broadcast' }]
+                [{ text: '📢 Diffuser message', callback_data: 'admin_broadcast' }],
+                [{ text: '📣 Publicités (Ads)', callback_data: 'admin_ads' }]
               ]
             }
           });
@@ -208,7 +188,7 @@ bot.hears(
         break;
     }
   }
-);
+});
 
 // Commande /admin (alternative via commande)
 bot.command('admin', async (ctx) => {
@@ -220,262 +200,68 @@ bot.command('admin', async (ctx) => {
       inline_keyboard: [
         [{ text: '👥 Total Utilisateurs', callback_data: 'admin_users' }],
         [{ text: '📅 Utilisateurs/mois', callback_data: 'admin_month' }],
-        [{ text: '📢 Diffuser message', callback_data: 'admin_broadcast' }]
+        [{ text: '📢 Diffuser message', callback_data: 'admin_broadcast' }],
+        [{ text: '📣 Publicités (Ads)', callback_data: 'admin_ads' }]
       ]
     }
   });
 });
 
-
-
-
-
-
-
-
-// Vérifier si l'utilisateur est administrateur
-function isAdmin(userId) {
-  return String(userId) === ADMIN_ID;
-}
-
-// Fonction utilitaire pour faire une pause entre les envois par lots
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-// Fonction utilitaire pour envoyer le contenu d'un broadcast
-async function sendContent(chatId, content) {
-  try {
-    if (content.photo) {
-      return await bot.telegram.sendPhoto(chatId, content.photo, {
-        caption: content.caption,
-        parse_mode: content.parse_mode,
-        entities: content.entities
-      });
-    } else if (content.video) {
-      return await bot.telegram.sendVideo(chatId, content.video.file_id, {
-        caption: content.caption,
-        parse_mode: content.parse_mode,
-        entities: content.entities
-      });
-    } else if (content.document) {
-      return await bot.telegram.sendDocument(chatId, content.document.file_id, {
-        caption: content.caption,
-        parse_mode: content.parse_mode,
-        entities: content.entities
-      });
-    } else if (content.text) {
-      return await bot.telegram.sendMessage(chatId, content.text, {
-        parse_mode: content.parse_mode,
-        entities: content.entities
-      });
-    }
-  } catch (error) {
-    console.error(`Erreur lors de l'envoi pour ${chatId}:`, error.message);
-    throw error;
-  }
-}
-
-// Commande /send pour lancer une diffusion
-bot.command('send', async (ctx) => {
-  if (ctx.chat.type !== 'private') return;
-  if (!isAdmin(ctx.from.id)) return;
-
-  // Il faut répondre à un message pour lancer la diffusion
-  const message = ctx.message.reply_to_message;
-  if (!message) return ctx.reply('⚠️ Répondez à un message avec /send');
-
-  const content = {
-    text: message.text,
-    caption: message.caption,
-    entities: message.entities || message.caption_entities,
-    photo: message.photo ? message.photo[message.photo.length - 1].file_id : null,
-    video: message.video ? { file_id: message.video.file_id } : null,
-    document: message.document ? { file_id: message.document.file_id } : null,
-    parse_mode: 'MarkdownV2'
-  };
-
-  // Insertion du broadcast dans la collection 'broadcasts'
-  await db.collection('broadcasts').insertOne({
-    content,
-    date: new Date(),
-    initiator: ctx.from.id
-  });
-
-  await ctx.reply(
-    `⚠️ Diffuser ce message à tous les utilisateurs ?\n\n` +
-    `📝 Type: ${message.photo ? 'Photo' : ''}${message.video ? ' Vidéo' : ''}${message.document ? ' Document' : ''}${message.text ? ' Texte' : ''}\n` +
-    `📏 Légende: ${content.caption ? 'Oui' : 'Non'}`,
-    Markup.inlineKeyboard([
-      Markup.button.callback('✅ Confirmer', 'confirm_broadcast'),
-      Markup.button.callback('❌ Annuler', 'cancel_broadcast')
-    ])
-  );
-});
-
-// Action pour confirmer la diffusion
-bot.action('confirm_broadcast', async (ctx) => {
-  try {
-    // Supposons que tes utilisateurs sont stockés dans la collection "users" et qu'ils possèdent le champ 'telegram_id'
-    const users = await db.collection('users')
-      .find({ status: 'pending' })
-      .project({ telegram_id: 1 })
-      .toArray();
-
-    // Récupération du dernier broadcast enregistré
-    const broadcast = await db.collection('broadcasts')
-      .findOne({}, { sort: { $natural: -1 } });
-
-    if (!broadcast) return ctx.reply('Aucun broadcast trouvé.');
-
-    let success = 0, failed = 0;
-    const batchSize = 30;
-    const totalUsers = users.length;
-
-    // Message initial pour suivre la progression
-    let statusMessage = await ctx.editMessageText(
-      `🚀 **Diffusion en cours...**\n\n` +
-      `📢 **Total à envoyer :** ${totalUsers}\n` +
-      `✅ **Réussis :** 0\n` +
-      `❌ **Échecs :** 0\n` +
-      `📡 **Progression :** 0%`
-    );
-
-    // Fonction pour mettre à jour les statistiques de diffusion
-    async function updateStats() {
-      try {
-        await bot.telegram.editMessageText(
-          ctx.chat.id, statusMessage.message_id, null,
-          `🚀 **Diffusion en cours...**\n\n` +
-          `📢 **Total à envoyer :** ${totalUsers}\n` +
-          `✅ **Réussis :** ${success}\n` +
-          `❌ **Échecs :** ${failed}\n` +
-          `📡 **Progression :** ${((success + failed) / totalUsers * 100).toFixed(2)}%`
-        );
-      } catch (error) {
-        console.error("Erreur mise à jour stats:", error);
-      }
-    }
-
-    const updateInterval = setInterval(updateStats, 1000);
-
-    // Envoi par lots pour éviter les surcharges
-    for (let i = 0; i < users.length; i += batchSize) {
-      const batch = users.slice(i, i + batchSize);
-      const batchPromises = batch.map(async user => {
-        try {
-          await sendContent(user.telegram_id, broadcast.content);
-          success++;
-        } catch (error) {
-          failed++;
-        }
-      });
-
-      await Promise.all(batchPromises);
-      await sleep(1000);
-    }
-
-    clearInterval(updateInterval);
-
-    await ctx.editMessageText(
-      `✅ **Diffusion terminée !**\n\n` + 
-      `📢 **Total :** ${totalUsers}\n` +
-      `✅ **Réussis :** ${success}\n` +
-      `❌ **Échecs :** ${failed}\n` +
-      `📡 **Progression :** 100%`
-    );
-  } catch (error) {
-    console.error("Erreur lors de la diffusion:", error);
-    await ctx.reply('❌ Une erreur est survenue pendant la diffusion.');
-  }
-});
-
-// Action pour annuler la diffusion
-bot.action('cancel_broadcast', async (ctx) => {
-  await ctx.editMessageText('❌ Diffusion annulée.');
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Processus de retrait via messages texte
 bot.on('text', async (ctx) => {
   const userId = ctx.message.from.id;
   const userState = withdrawalProcess.get(userId);
-  if (!userState) return;
-
-  const user = await User.findOne({ id: userId });
-  if (!user) {
-    withdrawalProcess.delete(userId);
-    return ctx.reply('❌ Utilisateur non trouvé');
-  }
-
-  switch (userState.step) {
-    case 'awaiting_payment_method':
-      userState.paymentMethod = ctx.message.text;
-      userState.step = 'awaiting_country';
-      await ctx.reply('🌍 Pays de résidence :');
-      break;
-    case 'awaiting_country':
-      userState.country = ctx.message.text;
-      userState.step = 'awaiting_phone';
-      await ctx.reply('📞 Téléphone (avec indicatif) :');
-      break;
-    case 'awaiting_phone':
-      userState.phone = ctx.message.text;
-      userState.step = 'awaiting_email';
-      await ctx.reply('📧 Email :');
-      break;
-    case 'awaiting_email':
-      userState.email = ctx.message.text;
-      const withdrawal = new Withdrawal({
-        userId,
-        amount: user.balance,
-        ...userState
-      });
-      await withdrawal.save();
-
-      await ctx.reply('✅ Demande enregistrée !');
-      await sendMessage(
-        ADMIN_ID,
-        `💸 Nouveau retrait\n\n` +
-        `👤 Utilisateur: @${ctx.from.username || 'N/A'}\n` +
-        `💰 Montant: ${user.balance} Fcfa\n` +
-        `📱 Méthode: ${userState.paymentMethod}\n` +
-        `🌍 Pays: ${userState.country}\n` +
-        `📞 Tél: ${userState.phone}\n` +
-        `📧 Email: ${userState.email}`
-      );
+  if (userState) {
+    const user = await User.findOne({ id: userId });
+    if (!user) {
       withdrawalProcess.delete(userId);
-      break;
+      return ctx.reply('❌ Utilisateur non trouvé');
+    }
+    switch (userState.step) {
+      case 'awaiting_payment_method':
+        userState.paymentMethod = ctx.message.text;
+        userState.step = 'awaiting_country';
+        await ctx.reply('🌍 Pays de résidence :');
+        break;
+      case 'awaiting_country':
+        userState.country = ctx.message.text;
+        userState.step = 'awaiting_phone';
+        await ctx.reply('📞 Téléphone (avec indicatif) :');
+        break;
+      case 'awaiting_phone':
+        userState.phone = ctx.message.text;
+        userState.step = 'awaiting_email';
+        await ctx.reply('📧 Email :');
+        break;
+      case 'awaiting_email':
+        userState.email = ctx.message.text;
+        const withdrawal = new Withdrawal({
+          userId,
+          amount: user.balance,
+          ...userState
+        });
+        await withdrawal.save();
+        await ctx.reply('✅ Demande enregistrée !');
+        await sendMessage(ADMIN_ID,
+          `💸 Nouveau retrait\n\n` +
+          `👤 Utilisateur: @${ctx.from.username || 'N/A'}\n` +
+          `💰 Montant: ${user.balance} Fcfa\n` +
+          `📱 Méthode: ${userState.paymentMethod}\n` +
+          `🌍 Pays: ${userState.country}\n` +
+          `📞 Tél: ${userState.phone}\n` +
+          `📧 Email: ${userState.email}`
+        );
+        withdrawalProcess.delete(userId);
+        break;
+    }
   }
 });
 
-// Gestion des callbacks admin pour statistiques et diffusion
+// Gestion des callbacks admin pour statistiques et diffusion (diffusion via copyMessage)
 const broadcastState = new Map();
 bot.on('callback_query', async (ctx) => {
   const userId = String(ctx.from.id);
   const data = ctx.callbackQuery.data;
-
   if (userId === ADMIN_ID) {
     try {
       if (data === 'admin_users') {
@@ -486,25 +272,14 @@ bot.on('callback_query', async (ctx) => {
         const count = await User.countDocuments({ createdAt: { $gte: start } });
         await ctx.replyWithMarkdown(`📅 *Ce mois-ci:* ${count}`);
       } else if (data === 'admin_broadcast') {
+        // Lancement d'une diffusion (mode message cloné)
         broadcastState.set(userId, { step: 'awaiting_message' });
         await ctx.reply('📤 Envoyez le message à diffuser :');
-      } else if (data === 'broadcast_cancel') {
-        broadcastState.delete(userId);
-        await ctx.reply('Diffusion annulée.');
-      } else if (data.startsWith('broadcast_')) {
-        const [_, chatId, messageId] = data.split('_');
-        const users = await User.find().select('id');
-        let success = 0;
-        await ctx.reply(`Début diffusion à ${users.length} utilisateurs...`);
-        for (const user of users) {
-          try {
-            await bot.telegram.copyMessage(user.id, chatId, messageId);
-            success++;
-          } catch (error) {
-            console.error(`Échec à ${user.id}:`, error.message);
-          }
-        }
-        await ctx.reply(`✅ Diffusion terminée : ${success}/${users.length} réussis`);
+      } else if (data === 'admin_ads') {
+        // Activation du mode publicités (Ads)
+        adsState.active = false;
+        adsState.pendingMessage = null;
+        await ctx.reply('📨 Envoyez le message publicitaire à diffuser via /ads');
       }
     } catch (error) {
       console.error('Erreur admin:', error);
@@ -514,7 +289,195 @@ bot.on('callback_query', async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// Gestion globale des erreurs
+// --- Nouvelle fonctionnalité : Diffusion des publicités avec la commande /ads ---
+// On utilise Bottleneck pour limiter le débit
+const adsLimiter = new Bottleneck({
+  maxConcurrent: 30,
+  minTime: 50,
+  reservoir: 30,
+  reservoirRefreshInterval: 1000,
+  reservoirRefreshAmount: 30
+});
+
+// État global pour la diffusion des publicités
+let adsState = {
+  active: false,
+  pendingMessage: null,
+  totalUsers: 0,
+  processed: 0,
+  success: 0,
+  failed: 0,
+  startTime: null,
+  statsInterval: null,
+  statusMessageId: null,
+};
+
+// Commande /ads pour lancer la diffusion des pubs (accessible uniquement à l'admin)
+bot.command('ads', async (ctx) => {
+  if (String(ctx.from.id) !== ADMIN_ID) return;
+  adsState.pendingMessage = null;
+  await ctx.reply("📨 Envoyez le message publicitaire à diffuser (texte, photo, vidéo, etc.)");
+});
+
+// Réception du message publicitaire (uniquement admin)
+bot.on('message', async (ctx) => {
+  if (String(ctx.from.id) !== ADMIN_ID) return;
+  // Si une diffusion Ads est en cours ou déjà préparée, on n'interfère pas avec les autres messages
+  if (!adsState.pendingMessage && ctx.message && !ctx.message.text.startsWith('/')) {
+    adsState.pendingMessage = ctx.message;
+    const total = await User.countDocuments();
+    adsState.totalUsers = total;
+    const keyboard = Markup.inlineKeyboard([
+      Markup.button.callback('✅ Confirmer', 'confirm_ads'),
+      Markup.button.callback('❌ Annuler', 'cancel_ads')
+    ]);
+    await ctx.reply(
+      `⚠️ Confirmez la diffusion de la pub à ${total} utilisateurs\n` +
+      `Type: ${getMessageType(ctx.message)}\n` +
+      `Durée estimée: ${estimateBroadcastDuration(total)}`,
+      keyboard
+    );
+  }
+});
+
+// Annulation de la diffusion publicitaire
+bot.action('cancel_ads', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText('❌ Diffusion publicitaire annulée');
+  resetAdsState();
+});
+
+// Confirmation et lancement de la diffusion publicitaire
+bot.action('confirm_ads', async (ctx) => {
+  if (adsState.active || !adsState.pendingMessage) return;
+  adsState.active = true;
+  adsState.startTime = Date.now();
+  adsState.statusMessageId = ctx.callbackQuery.message.message_id;
+  try {
+    await ctx.answerCbQuery('🚀 Début de la diffusion publicitaire...');
+    await updateAdsProgress(ctx);
+    // Mise à jour périodique des stats
+    adsState.statsInterval = setInterval(() => updateAdsProgress(ctx), 3000);
+    // Récupération de tous les utilisateurs et envoi du message publicitaire
+    const users = await User.find({}, 'id').lean();
+    const tasks = users.map(user =>
+      adsLimiter.schedule(() =>
+        sendAdsWithRetry(user.id, adsState.pendingMessage)
+          .then(() => { adsState.success++; })
+          .catch(() => { adsState.failed++; })
+          .then(() => { adsState.processed++; })
+      )
+    );
+    await Promise.allSettled(tasks);
+    await finalizeAds(ctx);
+  } catch (error) {
+    console.error('Erreur publicitaire critique:', error);
+    await ctx.telegram.sendMessage(ctx.from.id, `❌ Erreur de diffusion pub : ${error.message}`);
+  } finally {
+    resetAdsState();
+  }
+});
+
+// Envoi avec réessai pour la diffusion publicitaire
+async function sendAdsWithRetry(userId, message, attempt = 1) {
+  try {
+    await sendAdsMessage(userId, message);
+  } catch (error) {
+    if (attempt < 2) {
+      await new Promise(resolve => setTimeout(resolve, attempt * 500));
+      return sendAdsWithRetry(userId, message, attempt + 1);
+    }
+    console.error(`❌ Échec d'envoi pub à ${userId} après ${attempt} tentatives.`);
+    throw error;
+  }
+}
+
+// Envoi du message publicitaire (selon type)
+async function sendAdsMessage(userId, message) {
+  try {
+    if (message.text) {
+      await bot.telegram.sendMessage(userId, message.text);
+    } else if (message.photo) {
+      await bot.telegram.sendPhoto(userId, message.photo[0].file_id, { caption: message.caption || '' });
+    } else if (message.video) {
+      await bot.telegram.sendVideo(userId, message.video.file_id, { caption: message.caption || '' });
+    }
+  } catch (error) {
+    error.userId = userId;
+    throw error;
+  }
+}
+
+// Mise à jour des statistiques pour la diffusion publicitaire
+async function updateAdsProgress(ctx) {
+  const elapsed = Math.floor((Date.now() - adsState.startTime) / 1000);
+  const progress = (adsState.processed / adsState.totalUsers) * 100;
+  const speed = Math.round(adsState.processed / elapsed) || 0;
+  const statsMessage =
+`⏳ Progression : ${Math.round(progress)}% (${adsState.processed}/${adsState.totalUsers})
+⏱ Temps écoulé : ${elapsed}s
+📤 Vitesse : ${speed} msg/s
+✅ Réussis : ${adsState.success}
+❌ Échecs : ${adsState.failed}`;
+  try {
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      adsState.statusMessageId,
+      null,
+      statsMessage
+    );
+  } catch (error) {
+    console.error('Erreur de mise à jour Ads:', error.message);
+  }
+}
+
+// Finalisation de la diffusion publicitaire
+async function finalizeAds(ctx) {
+  clearInterval(adsState.statsInterval);
+  const totalTime = Math.floor((Date.now() - adsState.startTime) / 1000);
+  const finalMessage =
+`🏁 Diffusion pub terminée !
+Durée totale : ${totalTime}s
+Utilisateurs atteints : ${adsState.success}/${adsState.totalUsers}
+Taux de succès : ${((adsState.success / adsState.totalUsers) * 100).toFixed(1)}%`;
+  await ctx.telegram.editMessageText(
+    ctx.chat.id,
+    adsState.statusMessageId,
+    null,
+    finalMessage
+  );
+}
+
+// Réinitialisation de l'état publicitaire
+function resetAdsState() {
+  adsState = {
+    active: false,
+    pendingMessage: null,
+    totalUsers: 0,
+    processed: 0,
+    success: 0,
+    failed: 0,
+    startTime: null,
+    statsInterval: null,
+    statusMessageId: null,
+  };
+}
+
+// Helper : détermine le type de message (utilisé pour la diffusion et estimation)
+function getMessageType(message) {
+  if (message.text) return 'text';
+  if (message.photo) return 'photo';
+  if (message.video) return 'video';
+  return 'unknown';
+}
+
+// Helper : estime la durée de diffusion (en fonction du nombre d'utilisateurs)
+function estimateBroadcastDuration(userCount) {
+  const seconds = Math.round((userCount * 50) / 1000); // 50ms par message
+  return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+}
+
+// --- Gestion globale des erreurs ---
 bot.catch((err, ctx) => {
   console.error(`❌ Erreur pour ${ctx.updateType}:`, err);
 });
