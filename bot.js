@@ -1,5 +1,23 @@
+const { Telegraf, Markup } = require('telegraf');
+const { MongoClient } = require('mongodb');
+// … tes autres imports
 
-const { Telegraf } = require('telegraf');
+const adminSessions = new Map();
+let PLimit;
+
+// setup MongoDB
+const client = new MongoClient(process.env.MONGO_URI);
+await client.connect();
+const db = client.db('bot_spam');
+const usersCollection = db.collection('users');
+
+
+
+
+
+
+
+
 const http = require('http');
 const { User, Withdrawal } = require('./database');
 
@@ -247,6 +265,178 @@ bot.command('admin', async (ctx) => {
 
 
 
+// 👉 Variables globales pour la gestion des sessions et du throttle
+const adminSessions = new Map();
+let PLimit;
+
+// /ads command handler
+bot.command('ads', async (ctx) => {
+  // Sécurité : seule l’admin peut lancer
+  if (String(ctx.from.id) !== ADMIN_ID) return;
+  
+  // Nombre total d’utilisateurs
+  const totalUsers = await usersCollection.countDocuments();
+  
+  // On stocke l’état de la session
+  adminSessions.set(ctx.from.id, {
+    stage: 'awaiting_content',
+    total: totalUsers
+  });
+  
+  // On prévient l’admin
+  return ctx.reply(
+    `Hey bro, tu es sur le point d'envoyer des pubs à ${totalUsers} users. Envoie-moi le contenu (texte, photo, vidéo, audio, document, etc.).`
+  );
+});
+
+// Capture du contenu (texte, photo, vidéo, audio, document, voice…)
+bot.on(['text', 'photo', 'video', 'audio', 'document', 'voice'], async (ctx) => {
+  const session = adminSessions.get(ctx.from.id);
+  if (!session || session.stage !== 'awaiting_content') return;
+  
+  // On détermine le type et on stocke file_id + légende si besoin
+  let content = { type: 'text', data: ctx.message.text || '' };
+  if (ctx.message.photo) {
+    const photo = ctx.message.photo.pop();
+    content = { type: 'photo', file_id: photo.file_id, caption: ctx.message.caption || '' };
+  } else if (ctx.message.video) {
+    content = { type: 'video', file_id: ctx.message.video.file_id, caption: ctx.message.caption || '' };
+  } else if (ctx.message.audio) {
+    content = { type: 'audio', file_id: ctx.message.audio.file_id, caption: ctx.message.caption || '' };
+  } else if (ctx.message.voice) {
+    content = { type: 'voice', file_id: ctx.message.voice.file_id };
+  } else if (ctx.message.document) {
+    content = { type: 'document', file_id: ctx.message.document.file_id, caption: ctx.message.caption || '' };
+  }
+  
+  // On passe à l’étape suivante
+  session.content = content;
+  session.stage = 'awaiting_confirm';
+  
+  // Prévisualisation succincte
+  let preview = '';
+  switch (content.type) {
+    case 'text':     preview = content.data; break;
+    case 'photo':    preview = '📸 Photo';        break;
+    case 'video':    preview = '🎥 Vidéo';        break;
+    case 'audio':    preview = '🎵 Audio';        break;
+    case 'voice':    preview = '🎙️ Voice';       break;
+    case 'document': preview = '📄 Document';     break;
+  }
+  
+  return ctx.reply(
+    `Prévisualisation : ${preview}\n\nVoulez-vous confirmer la diffusion ?`,
+    Markup.inlineKeyboard([
+      Markup.button.callback('✅ Oui', 'ads_confirm'),
+      Markup.button.callback('❌ Non', 'ads_cancel')
+    ])
+  );
+});
+
+// Confirmation de l’admin
+bot.action('ads_confirm', async (ctx) => {
+  if (String(ctx.from.id) !== ADMIN_ID) return ctx.answerCbQuery();
+  const session = adminSessions.get(ctx.from.id);
+  if (!session || session.stage !== 'awaiting_confirm') return ctx.answerCbQuery();
+  
+  // On bascule en mode broadcast
+  await ctx.editMessageText('🔄 Lancement de la diffusion...');
+  session.stage = 'broadcasting';
+  
+  // Lancement asynchrone de la diffusion
+  broadcastAds(ctx, session).catch(console.error);
+  return ctx.answerCbQuery();
+});
+
+// Annulation
+bot.action('ads_cancel', async (ctx) => {
+  if (String(ctx.from.id) !== ADMIN_ID) return ctx.answerCbQuery();
+  adminSessions.delete(ctx.from.id);
+  await ctx.editMessageText('❌ Diffusion annulée.');
+  return ctx.answerCbQuery();
+});
+
+// Fonction de broadcast avec stats en temps réel
+async function broadcastAds(ctx, session) {
+  const { total, content } = session;
+  if (!PLimit) {
+    PLimit = (await import('p-limit')).default;
+  }
+  const limit = PLimit(20); // max 20 envois concurrents
+  let success = 0;
+  let failed = 0;
+  const start = Date.now();
+  
+  // Message de statut
+  const statusMsg = await ctx.reply(`✅: 0 | ❌: 0 | 0 msg/s`);
+  
+  // On parcourt les users en streaming
+  const cursor = usersCollection.find({}, { projection: { id: 1 } });
+  const tasks = [];
+  let sent = 0;
+  
+  while (await cursor.hasNext()) {
+    const user = await cursor.next();
+    tasks.push(limit(async () => {
+      try {
+        // Envoi selon le type
+        switch (content.type) {
+          case 'text':
+            await bot.telegram.sendMessage(user.id, content.data);
+            break;
+          case 'photo':
+            await bot.telegram.sendPhoto(user.id, content.file_id, { caption: content.caption });
+            break;
+          case 'video':
+            await bot.telegram.sendVideo(user.id, content.file_id, { caption: content.caption });
+            break;
+          case 'audio':
+            await bot.telegram.sendAudio(user.id, content.file_id, { caption: content.caption });
+            break;
+          case 'voice':
+            await bot.telegram.sendVoice(user.id, content.file_id);
+            break;
+          case 'document':
+            await bot.telegram.sendDocument(user.id, content.file_id, { caption: content.caption });
+            break;
+        }
+        success++;
+      } catch (err) {
+        failed++;
+      } finally {
+        sent++;
+        // Mise à jour toutes les 50 itérations
+        if (sent % 50 === 0) {
+          const elapsed = (Date.now() - start) / 1000;
+          const rate = (sent / elapsed).toFixed(2);
+          try {
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              statusMsg.message_id,
+              null,
+              `✅: ${success} | ❌: ${failed} | ${rate} msg/s`
+            );
+          } catch (_) {}
+        }
+      }
+    }));
+  }
+  
+  // On attend tout
+  await Promise.all(tasks);
+  
+  // Bilan final
+  const totalTime = ((Date.now() - start) / 1000).toFixed(2);
+  await ctx.telegram.editMessageText(
+    ctx.chat.id,
+    statusMsg.message_id,
+    null,
+    `🎉 Terminé ! Total ✅: ${success} | ❌: ${failed} | en ${totalTime}s`
+  );
+  
+  // On nettoie la session
+  adminSessions.delete(ctx.from.id);
+}
 
 
 
