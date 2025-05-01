@@ -1,15 +1,18 @@
-// bot.js - Partie 1/2
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-const pLimit = require('p-limit');
-const { User, Withdrawal, Ads } = require('./database');
+const pLimit = require('p-limit'); // Correction de l'import
 
 // Configuration initiale
 dotenv.config();
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
 const MONGO_URI = process.env.MONGO_URI;
+
+// Initialisation de p-limit
+const broadcastConcurrency = pLimit(20); // Initialisation correcte
+
+
 
 // Vérification des variables d'environnement
 if (!BOT_TOKEN || !ADMIN_ID || !MONGO_URI) {
