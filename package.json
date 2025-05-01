@@ -1,10 +1,20 @@
 {
   "name": "cashx-bot",
   "version": "1.0.0",
+  "description": "Bot de parrainage et récompenses CashXElite",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
   },
+  "keywords": [
+    "telegram",
+    "bot",
+    "cash",
+    "referral"
+  ],
+  "author": "Votre Nom",
+  "license": "ISC",
   "dependencies": {
     "telegraf": "^4.12.2",
     "mongoose": "^8.3.3",
@@ -12,6 +22,7 @@
     "p-limit": "^5.0.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   }
 }
