@@ -1,7 +1,8 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
+const pLimit = require('p-limit');
+const { User, Withdrawal } = require('./database');
 const dotenv = require('dotenv');
-const pLimit = require('p-limit'); // Correction de l'import
 
 // Configuration initiale
 dotenv.config();
@@ -9,18 +10,12 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
 const MONGO_URI = process.env.MONGO_URI;
 
-// Initialisation de p-limit
-const broadcastConcurrency = pLimit(20); // Initialisation correcte
-
-
-
 // Vérification des variables d'environnement
 if (!BOT_TOKEN || !ADMIN_ID || !MONGO_URI) {
   console.error('❌ Variables manquantes dans .env');
   process.exit(1);
 }
 
-// Initialisation du bot
 const bot = new Telegraf(BOT_TOKEN);
 const withdrawalProcess = new Map();
 const adminSessions = new Map();
@@ -40,12 +35,8 @@ mongoose.connect(MONGO_URI, {
 // Middleware principal
 bot.use(async (ctx, next) => {
   try {
-    // Logging des activités
-    console.log(`[Update] ${ctx.updateType} from ${ctx.from?.id}`);
-    
-    // Vérification admin
+    console.log(`[Update] ${ctx.updateType} de ${ctx.from?.id}`);
     ctx.isAdmin = String(ctx.from?.id) === ADMIN_ID;
-    
     await next();
   } catch (error) {
     console.error('❌ Middleware Error:', error);
@@ -55,7 +46,7 @@ bot.use(async (ctx, next) => {
   }
 });
 
-// Gestion des commandes utilisateur
+// Commande /start
 bot.start(async (ctx) => {
   const userData = ctx.message.from;
   const referrerId = ctx.startPayload;
@@ -90,6 +81,10 @@ bot.start(async (ctx) => {
 // Vérification des canaux
 bot.action('verify_channels', async (ctx) => {
   const userId = ctx.from.id;
+  // Suite dans partie 2...// ... Suite de la Partie 1
+
+bot.action('verify_channels', async (ctx) => {
+  const userId = ctx.from.id;
   const isSubscribed = await checkSubscriptions(userId);
 
   if (isSubscribed) {
@@ -113,206 +108,195 @@ bot.action('verify_channels', async (ctx) => {
         { $inc: { invited_count: 1, tickets: 1 } }
       );
       await updateUserBalance(user.referrer_id);
+      await ctx.telegram.sendMessage(
+        user.referrer_id,
+        `🎉 Nouveau filleul ! @${user.username} a rejoint via votre lien`
+      );
     }
   } else {
-    await ctx.reply('❌ Veuillez rejoindre tous les canaux');
+    await ctx.replyWithMarkdown('❌ *Rejoignez tous les canaux requis*');
   }
 });
 
-// Commandes du menu principal
+// Commandes principales
 const mainCommands = {
   '💰 Mon Compte': async (ctx) => {
     const user = await User.findOne({ id: ctx.from.id });
-    const msg = `💵 Solde: ${user.balance} FCFA\n` +
-                `👥 Invités: ${user.invited_count}\n` +
-                `🎟 Tickets: ${user.tickets}`;
-    await ctx.reply(msg);
+    const balanceInfo = `💶 *Solde* : ${user.balance} FCFA\n` +
+                       `👥 *Filleuls* : ${user.invited_count}\n` +
+                       `🎫 *Tickets* : ${user.tickets}`;
+    await ctx.replyWithMarkdown(balanceInfo);
   },
-  
+
   '📢 Inviter': async (ctx) => {
     const refLink = `https://t.me/${ctx.botInfo.username}?start=${ctx.from.id}`;
-    await ctx.replyWithMarkdown(`🎯 *Programme de parrainage*\n\n` +
-      `Invitez des amis avec ce lien:\n\`${refLink}\`\n\n` +
-      `📈 Récompenses:\n` +
-      `1-10 invites: 200 FCFA/invite\n` +
-      `10-20 invites: 300 FCFA/invite\n` +
-      `20+ invites: 400 FCFA/invite`);
+    const message = `*📣 Programme de Parrainage*\n\n` +
+                   `Gagnez 200-400 FCFA par invitation!\n\n` +
+                   `🔗 Lien unique : \`${refLink}\`\n\n` +
+                   `🎯 Paliers :\n` +
+                   `- 1-10 invites : 200 FCFA\n` +
+                   `- 11-20 invites : 300 FCFA\n` +
+                   `- 21+ invites : 400 FCFA`;
+    await ctx.replyWithMarkdown(message);
+  },
+
+  '💸 Retrait': async (ctx) => {
+    const user = await User.findOne({ id: ctx.from.id });
+    
+    if (user.balance < 10000) {
+      return ctx.replyWithMarkdown('❌ *Minimum 10 000 FCFA requis*');
+    }
+
+    withdrawalProcess.set(user.id, { 
+      step: 'method',
+      userBalance: user.balance 
+    });
+
+    await ctx.reply('💳 Choisissez votre méthode :', {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback('📱 Mobile Money', 'withdraw_momo')],
+        [Markup.button.callback('💳 Carte Bancaire', 'withdraw_card')]
+      ])
+    });
   }
 };
 
-// Gestion des messages texte
-bot.hears(Object.keys(mainCommands), async (ctx) => {
-  await mainCommands[ctx.message.text](ctx);
-});
-
-// Système de retrait
-bot.hears('💸 Retrait', async (ctx) => {
-  const user = await User.findOne({ id: ctx.from.id });
-  
-  if (user.balance < 10000) {
-    return ctx.reply('❌ Solde insuffisant (min 10 000 FCFA)');
-  }
-
-  withdrawalProcess.set(user.id, { step: 'method' });
-  await ctx.reply('Choisissez un mode de retrait:', {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: 'Mobile Money', callback_data: 'withdraw_momo' }],
-        [{ text: 'Carte Bancaire', callback_data: 'withdraw_card' }]
-      ]
-    }
-  });
-});
-
-// Suite dans la partie 2...
-
-
-// bot.js - Partie 2/2
-
-// Gestion des retraits
+// Gestion des actions de retrait
 bot.action(/withdraw_(momo|card)/, async (ctx) => {
   const userId = ctx.from.id;
-  const method = ctx.match[1];
   const session = withdrawalProcess.get(userId);
   
   if (!session || session.step !== 'method') return;
   
-  session.method = method === 'momo' ? 'Mobile Money' : 'Carte Bancaire';
-  session.step = 'phone';
-  await ctx.editMessageText(`📱 Entrez votre numéro ${method === 'momo' ? 'Mobile Money (format: 2250708070707)' : 'de carte'}`);
+  session.method = ctx.match[1] === 'momo' ? 'Mobile Money' : 'Carte Bancaire';
+  session.step = 'phone_input';
+  
+  await ctx.editMessageText(
+    `📱 Entrez votre numéro ${session.method === 'Mobile Money' ? 
+    'Mobile Money (ex: +2250707070707)' : 
+    'de carte bancaire'}`
+  );
 });
 
-// Collecte des informations de retrait
+// Capture des informations de retrait
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const session = withdrawalProcess.get(userId);
+  
   if (!session) return;
 
   switch (session.step) {
-    case 'phone':
+    case 'phone_input':
       session.phone = ctx.message.text;
-      session.step = 'email';
-      await ctx.reply('📧 Entrez votre adresse email:');
+      session.step = 'email_input';
+      await ctx.reply('📧 Entrez votre adresse email :');
       break;
       
-    case 'email':
+    case 'email_input':
       session.email = ctx.message.text;
-      await finalizeWithdrawal(ctx, session);
+      await processWithdrawal(ctx, session);
       withdrawalProcess.delete(userId);
       break;
   }
 });
 
-async function finalizeWithdrawal(ctx, session) {
-  const user = await User.findOne({ id: ctx.from.id });
-  
-  // Création de la demande
-  const withdrawal = new Withdrawal({
-    userId: user.id,
-    amount: user.balance,
-    method: session.method,
-    phone: session.phone,
-    email: session.email
-  });
-  
-  await withdrawal.save();
-  
-  // Réinitialisation solde
-  await User.updateOne({ id: user.id }, { $set: { balance: 0 } });
-  
-  // Notification admin
-  await bot.telegram.sendMessage(
-    ADMIN_ID,
-    `💸 NOUVEAU RETRAIT!\n\n` +
-    `👤 Utilisateur: @${ctx.from.username}\n` +
-    `💰 Montant: ${user.balance} FCFA\n` +
-    `📱 Méthode: ${session.method}\n` +
-    `📞 Contact: ${session.phone}\n` +
-    `📧 Email: ${session.email}`
-  );
-  
-  await ctx.reply('✅ Demande enregistrée! Traitement sous 24h.');
+// ... La suite dans la Partie 3 ...// ... Suite de la Partie 2
+
+// Finalisation du retrait
+async function processWithdrawal(ctx, session) {
+  try {
+    const user = await User.findOne({ id: ctx.from.id });
+    
+    // Création de la demande
+    const withdrawal = new Withdrawal({
+      userId: user.id,
+      amount: user.balance,
+      method: session.method,
+      phone: session.phone,
+      email: session.email,
+      status: 'pending'
+    });
+
+    await withdrawal.save();
+    
+    // Réinitialisation du solde
+    await User.updateOne({ id: user.id }, { balance: 0 });
+
+    // Notification admin
+    await bot.telegram.sendMessage(
+      ADMIN_ID,
+      `⚠️ *NOUVEAU RETRAIT* ⚠️\n\n` +
+      `👤 Utilisateur: @${ctx.from.username}\n` +
+      `📱 Méthode: ${session.method}\n` +
+      `💸 Montant: ${user.balance} FCFA\n` +
+      `📞 Contact: ${session.phone}\n` +
+      `📧 Email: ${session.email}`,
+      { parse_mode: 'Markdown' }
+    );
+
+    await ctx.replyWithMarkdown(
+      `✅ Demande de *${user.balance} FCFA* enregistrée !\n` +
+      `Traitement sous 24 heures maximum.`
+    );
+
+  } catch (error) {
+    console.error('❌ Erreur retrait:', error);
+    await ctx.reply('❌ Erreur lors du traitement');
+  }
 }
 
-// Système Tombola
-bot.hears('🎁 Tombola', async (ctx) => {
-  const user = await User.findOne({ id: ctx.from.id });
-  await ctx.reply(
-    `🎉 VOS TICKETS: ${user.tickets}\n\n` +
-    `1 ticket = 1 invitation\n` +
-    `Tirage tous les dimanches à 20h!`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback('🎰 Participer (5 tickets)', 'play_tombola')]
-    ])
-  );
-});
-
-bot.action('play_tombola', async (ctx) => {
-  const user = await User.findOne({ id: ctx.from.id });
-  
-  if (user.tickets < 5) {
-    return ctx.answerCbQuery('❌ Tickets insuffisants!');
-  }
-  
-  await User.updateOne({ id: user.id }, { $inc: { tickets: -5 } });
-  const win = Math.random() < 0.15; // 15% de chance
-  
-  if (win) {
-    await ctx.answerCbQuery('🎉 Vous gagnez 5000 FCFA!');
-    await User.updateOne({ id: user.id }, { $inc: { balance: 5000 } });
-  } else {
-    await ctx.answerCbQuery('❌ Pas de gain cette fois...');
-  }
-});
-
-// Système de broadcast admin
+// Système Admin
 bot.command('ads', async (ctx) => {
   if (!ctx.isAdmin) return;
-  
+
   const userCount = await User.countDocuments();
   adminSessions.set(ctx.from.id, {
     stage: 'awaiting_content',
     stats: { total: userCount, sent: 0, failed: 0 }
   });
-  
-  await ctx.reply(`📢 Broadcast prêt pour ${userCount} users. Envoyez le contenu:`);
-});
 
-// Gestion du contenu média
-bot.on(['photo', 'video', 'document', 'audio'], async (ctx) => {
-  const session = adminSessions.get(ctx.from.id);
-  if (!session || session.stage !== 'awaiting_content') return;
-  
-  session.content = {
-    type: ctx.update.message.photo ? 'photo' : 
-          ctx.update.message.video ? 'video' :
-          ctx.update.message.document ? 'document' : 'audio',
-    file_id: ctx.message[ctx.updateType].file_id,
-    caption: ctx.message.caption || ''
-  };
-  
-  session.stage = 'confirm';
-  await ctx.reply('Confirmer la diffusion?', 
-    Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Lancer (irréversible)', 'confirm_broadcast')],
-      [Markup.button.callback('❌ Annuler', 'cancel_broadcast')]
-    ])
+  await ctx.replyWithMarkdown(
+    `📢 *Mode Diffusion Admin*\n\n` +
+    `Prêt à envoyer à *${userCount}* utilisateurs\n\n` +
+    `Envoyez le contenu (texte/photo/vidéo)...`
   );
 });
 
-// Confirmation broadcast
+// Gestion des médias pour broadcast
+bot.on(['photo', 'video', 'document'], async (ctx) => {
+  const session = adminSessions.get(ctx.from.id);
+  if (!session || session.stage !== 'awaiting_content') return;
+
+  // Extraction des infos média
+  const content = {
+    type: ctx.update.message.photo ? 'photo' : 
+          ctx.update.message.video ? 'video' : 'document',
+    file_id: ctx.message[ctx.updateType].file_id,
+    caption: ctx.message.caption || ''
+  };
+
+  session.content = content;
+  session.stage = 'confirmation';
+
+  await ctx.reply('Confirmer la diffusion ?', Markup.inlineKeyboard([
+    [Markup.button.callback('✅ LANCER (IRRÉVERSIBLE)', 'confirm_broadcast')],
+    [Markup.button.callback('❌ ANNULER', 'cancel_broadcast')]
+  ]));
+});
+
+// Diffusion effective
 bot.action('confirm_broadcast', async (ctx) => {
   const session = adminSessions.get(ctx.from.id);
-  if (!session || !session.content) return;
-  
-  const statusMsg = await ctx.editMessageText('🔄 Démarrage... 0%');
+  if (!session?.content) return;
+
+  const statusMsg = await ctx.editMessageText('🚀 Démarrage de la diffusion... 0%');
   const users = await User.find().select('id');
   
-  // Diffusion avec contrôle de concurrence
   let processed = 0;
   const startTime = Date.now();
-  
-  const sendPromises = users.map(user => 
+
+  // Traitement parallèle contrôlé
+  const promises = users.map(user => 
     broadcastConcurrency(async () => {
       try {
         await sendMedia(user.id, session.content);
@@ -320,15 +304,15 @@ bot.action('confirm_broadcast', async (ctx) => {
       } catch (err) {
         session.stats.failed++;
       }
-      
+
       processed++;
       if (processed % 50 === 0) {
         await updateBroadcastStatus(ctx, statusMsg, session, startTime);
       }
     })
   );
-  
-  await Promise.all(sendPromises);
+
+  await Promise.all(promises);
   await updateBroadcastStatus(ctx, statusMsg, session, startTime, true);
   adminSessions.delete(ctx.from.id);
 });
@@ -337,45 +321,47 @@ bot.action('confirm_broadcast', async (ctx) => {
 async function sendMedia(userId, content) {
   try {
     const method = `send${content.type.charAt(0).toUpperCase() + content.type.slice(1)}`;
-    await bot.telegram[method](userId, content.file_id, { caption: content.caption });
-  } catch (err) {
-    if (err.response.error_code === 403) {
+    await bot.telegram[method](userId, content.file_id, {
+      caption: content.caption,
+      parse_mode: 'Markdown'
+    });
+  } catch (error) {
+    if (error.code === 403) { // Utilisateur a bloqué le bot
       await User.deleteOne({ id: userId });
     }
-    throw err;
+    throw error;
   }
 }
 
-async function updateBroadcastStatus(ctx, msg, session, startTime, final = false) {
-  const progress = ((session.stats.sent + session.stats.failed) / session.stats.total * 100).toFixed(1);
+async function updateBroadcastStatus(ctx, statusMsg, session, startTime, isFinal = false) {
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  const totalProcessed = session.stats.sent + session.stats.failed;
   
-  const text = final ? 
-    `✅ Diffusion terminée!\n` +
-    `📩 Envoyés: ${session.stats.sent}\n` +
-    `❌ Échecs: ${session.stats.failed}\n` +
-    `⏱ Temps: ${elapsed}s` :
-    
-    `📤 En cours... ${progress}%\n` +
-    `✅ ${session.stats.sent} | ❌ ${session.stats.failed}\n` +
-    `⏱ ${elapsed}s | 🚀 ${((session.stats.sent + session.stats.failed) / elapsed).toFixed(1)} msg/s`;
-  
+  const stats = isFinal 
+    ? `✅ ${session.stats.sent} | ❌ ${session.stats.failed} | ⏱ ${elapsed}s`
+    : `📤 ${Math.round((totalProcessed / session.stats.total) * 100)}% | ` +
+      `🚀 ${(totalProcessed / elapsed).toFixed(1)} msg/s`;
+
   await ctx.telegram.editMessageText(
     ctx.chat.id,
-    msg.message_id,
+    statusMsg.message_id,
     null,
-    text
+    `📊 *Statut Diffusion*\n\n${stats}`,
+    { parse_mode: 'Markdown' }
   );
 }
 
-// Gestion erreurs
-process.on('unhandledRejection', error => {
-  console.error('⚠️ Unhandled Rejection:', error);
+// Démarrage du bot
+bot.launch().then(() => {
+  console.log('🤖 Bot en ligne');
+  // Serveur minimal pour keep-alive
+  require('http').createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot CashXElite actif');
+  }).listen(process.env.PORT || 3000);
 });
 
-// Démarrage
-bot.launch().then(() => {
-  console.log('🚀 Bot opérationnel');
-  // Serveur keep-alive
-  require('http').createServer((req, res) => res.end('Bot actif')).listen(3000);
+// Gestion des erreurs globales
+process.on('unhandledRejection', error => {
+  console.error('⚠️ UNHANDLED REJECTION:', error);
 });
