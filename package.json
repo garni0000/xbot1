@@ -1,24 +1,17 @@
 {
-  "name": "mon-bot",
+  "name": "cashx-bot",
   "version": "1.0.0",
-  "description": "Bot Telegram avec MongoDB et dotenv",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "start": "node bot.js"
   },
   "dependencies": {
-    "dotenv": "^16.0.3",
-    "mongoose": "^7.0.0",
-    "telegraf": "^4.12.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.0"
+    "telegraf": "^4.12.2",
+    "mongoose": "^8.3.3",
+    "dotenv": "^16.4.0",
+    "p-limit": "^5.0.0"
   },
   "engines": {
-    "node": ">=16"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "MIT"
+    "node": ">=18.0.0"
+  }
 }
