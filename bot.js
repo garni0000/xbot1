@@ -267,85 +267,142 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// Gestion des callbacks admin pour statistiques et diffusion
-const broadcastState = new Map();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Gestion des callbacks admin
 bot.on('callback_query', async (ctx) => {
   const userId = String(ctx.from.id);
   const data = ctx.callbackQuery.data;
 
-  if (userId === ADMIN_ID) {
-    try {
-      if (data === 'admin_users') {
-        const count = await User.countDocuments();
-        await ctx.replyWithMarkdown(`👥 *Total utilisateurs:* ${count}`);
+  if (userId !== ADMIN_ID) {
+    return ctx.answerCbQuery("❌ Action non autorisée");
+  }
 
-      } else if (data === 'admin_month') {
-        const start = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-        const count = await User.countDocuments({ createdAt: { $gte: start } });
-        await ctx.replyWithMarkdown(`📅 *Ce mois-ci:* ${count}`);
+  try {
+    if (data === 'admin_users') {
+      const count = await User.countDocuments();
+      await ctx.replyWithMarkdown(`👥 *Total utilisateurs:* ${count}`);
 
-  } else if (data === 'admin_broadcast') {
-    broadcastState.set(userId, { step: 'awaiting_message' });
-    await ctx.reply('📤 Envoyez le message à diffuser :');
+    } else if (data === 'admin_month') {
+      const start = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const count = await User.countDocuments({ createdAt: { $gte: start } });
+      await ctx.replyWithMarkdown(`📅 *Ce mois-ci:* ${count}`);
 
-} else if (data === 'broadcast_cancel') {
-    broadcastState.delete(userId);
-    await ctx.reply('🚫 Diffusion annulée.');
+    } else if (data === 'admin_broadcast') {
+      broadcastState.set(userId, { step: 'awaiting_message' });
+      await ctx.reply('📤 Envoyez le message à diffuser :');
 
-} else if (data.startsWith('broadcast_confirm_')) {
-    const [_, __, chatId, messageId] = data.split('_');
-    const users = await User.find().select('id');
-    const totalUsers = users.length;
-    
-    if (totalUsers === 0) {
+    } else if (data === 'broadcast_cancel') {
+      broadcastState.delete(userId);
+      await ctx.reply('🚫 Diffusion annulée.');
+
+    } else if (data.startsWith('broadcast_confirm_')) {
+      const [_, __, chatId, messageId] = data.split('_');
+      const users = await User.find().select('id');
+      const totalUsers = users.length;
+      
+      if (totalUsers === 0) {
         await ctx.reply('❌ Aucun utilisateur à contacter');
         return;
-    }
+      }
 
-    // Message de démarrage avec heure
-    const startTime = new Date();
-    await ctx.reply(`🚀 Début diffusion à ${totalUsers} utilisateurs à ${startTime.toLocaleTimeString()}...`);
-    
-    let success = 0;
-    let fails = 0;
-    const failReports = [];
-    const batchSize = 30; // Pour éviter le flood
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+      // Message de démarrage
+      const startTime = new Date();
+      const progressMsg = await ctx.reply(`🚀 Début diffusion à ${totalUsers} utilisateurs...`);
 
-    for (let i = 0; i < users.length; i++) {
-        const user = users[i];
+      let success = 0;
+      let fails = 0;
+      const failReports = [];
+      const batchSize = 30;
+      const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+      for (let i = 0; i < users.length; i++) {
         try {
-            await bot.telegram.copyMessage(user.id, chatId, messageId);
-            success++;
-            
-            // Pause toutes les 30 envois pour éviter le flood
-            if (i % batchSize === 0 && i !== 0) {
-                await delay(1000);
-            }
+          await bot.telegram.copyMessage(users[i].id, chatId, messageId);
+          success++;
+          
+          // Mise à jour de la progression
+          if (i % 10 === 0 || i === users.length - 1) {
+            await bot.telegram.editMessageText(
+              ctx.chat.id,
+              progressMsg.message_id,
+              null,
+              `📤 Diffusion en cours... ${i+1}/${totalUsers} (${Math.round(((i+1)/totalUsers)*100}%)`
+            );
+          }
+
+          if (i % batchSize === 0 && i !== 0) await delay(1000);
         } catch (error) {
-            fails++;
-            failReports.push(`👤 ${user.id}: ${error.message}`);
-            console.error(`Échec pour ${user.id}:`, error.message);
+          fails++;
+          failReports.push(`👤 ${users[i].id}: ${error.description || error.message}`);
         }
+      }
+
+      // Rapport final
+      const duration = (new Date() - startTime) / 1000;
+      let report = `✅ Diffusion terminée en ${duration} sec\n`;
+      report += `📊 Statistiques:\n• Succès: ${success}\n• Échecs: ${fails}`;
+
+      await ctx.reply(report);
+      if (failReports.length > 0) {
+        await ctx.reply(`📛 Derniers échecs:\n${failReports.slice(0, 5).join('\n')}`);
+      }
+    }
+  } catch (error) {
+    console.error('Erreur admin:', error);
+    await ctx.reply(`❌ Erreur: ${error.message}`);
+  }
+
+  await ctx.answerCbQuery();
+});
+
+// Capture du message à diffuser
+bot.on('message', async (ctx) => {
+  const userId = String(ctx.from.id);
+  const state = broadcastState.get(userId);
+
+  if (userId === ADMIN_ID && state?.step === 'awaiting_message') {
+    // Vérifier si c'est un message valide (texte, photo, etc.)
+    if (!ctx.message.text && !ctx.message.photo && !ctx.message.video) {
+      return ctx.reply('⚠️ Type de message non supporté pour la diffusion');
     }
 
-    // Message de résultat détaillé
-    const endTime = new Date();
-    const duration = (endTime - startTime) / 1000;
-    
-    let report = `✅ Diffusion terminée en ${duration} sec\n`;
-    report += `📊 Statistiques:\n`;
-    report += `• Succès: ${success}/${totalUsers} (${Math.round((success/totalUsers)*100)}%)\n`;
-    report += `• Échecs: ${fails}`;
-    
-    await ctx.reply(report);
+    broadcastState.set(userId, { step: 'confirming' });
 
-    // Envoyer les échecs si nécessaire (limité à 10 pour éviter les messages trop longs)
-    if (failReports.length > 0) {
-        const failedSample = failReports.slice(0, 10).join('\n');
-        await ctx.reply(`📛 Échecs (${failReports.length} au total):\n${failedSample}`);
-    }
-}
+    await ctx.reply('📝 Message reçu. Confirmer la diffusion ?', {
+      reply_markup: {
+        inline_keyboard: [
+          [{
+            text: '✅ Confirmer',
+            callback_data: `broadcast_confirm_${ctx.chat.id}_${ctx.message.message_id}`
+          }],
+          [{
+            text: '❌ Annuler',
+            callback_data: 'broadcast_cancel'
+          }]
+        ]
+      }
+    });
+  }
+});
+
+
+
+
+
 // Gestion globale des erreurs
 bot.catch((err, ctx) => {
   console.error(`❌ Erreur pour ${ctx.updateType}:`, err);
